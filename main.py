@@ -1,75 +1,149 @@
-import network
-import urequests
-import time
-from machine import Pin, I2C
-import math
+#include <WiFi.h>
+#include <HTTPClient.h>
+#include <Wire.h> 
 
-SSID = "SEU_WIFI"
-PASSWORD = "SUA_SENHA"
+// ===== WIFI =====
+const char* ssid = "Dragondex";
+const char* password = "testando";
 
-BOT_TOKEN = "SEU_BOT_TOKEN"
-CHAT_ID = "SEU_CHAT_ID"
+// ===== TELEGRAM =====
+String BOT_TOKEN = "8659967301:AAGkw0dkal2mRnroGONz6nEcr0UYv_lajxg";
+String CHAT_ID = "1674707575";
 
-botao = Pin(14, Pin.IN, Pin.PULL_UP)
+// ===== BOTÃO =====
+#define BOTAO 26
+bool botaoAnterior = HIGH;
 
-i2c = I2C(0, scl=Pin(22), sda=Pin(21))
-MPU_ADDR = 0x68
+// ===== MPU6050 =====
+const int MPU_ADDR = 0x68; 
+// Sensibilidade: Quanto MENOR esse número, mais sensível fica (dispara mais fácil)
+const float LIMITE_MOVIMENTO_BRUSCO = 1.5; 
 
-i2c.writeto_mem(MPU_ADDR, 0x6B, b'\x00')
+// Pinos I2C do ESP32
+#define I2C_SDA 21
+#define I2C_SCL 22
 
-alerta_queda_enviado = False
+unsigned long ultimoDisparoMpu = 0;
+const unsigned long INTERVALO_DISPARO = 6000; // Evita encher o Telegram de spam (espera 6 segundos)
 
-wifi = network.WLAN(network.STA_IF)
-wifi.active(True)
-wifi.connect(SSID, PASSWORD)
+// =========================
+// ENVIAR TELEGRAM
+// =========================
+bool enviarMensagem(String mensagem){
+  if(WiFi.status() != WL_CONNECTED){
+    Serial.println("WiFi desconectado");
+    return false;
+  }
 
-while not wifi.isconnected():
-    time.sleep(1)
+  HTTPClient http;
+  String url = "https://api.telegram.org/bot" + BOT_TOKEN + "/sendMessage?chat_id=" + CHAT_ID + "&text=";
 
-print("WiFi conectado!")
+  for(int i=0; i<mensagem.length(); i++){
+    if(mensagem[i]==' ') url += "%20";
+    else url += mensagem[i];
+  }
 
-def enviar_mensagem(mensagem):
+  http.begin(url);
+  int codigo = http.GET();
+  http.end();
 
-    url = (
-        f"https://api.telegram.org/bot{BOT_TOKEN}"
-        f"/sendMessage?chat_id={CHAT_ID}&text={mensagem}"
-    )
+  Serial.print("HTTP: ");
+  Serial.println(codigo);
 
-    try:
-        resposta = urequests.get(url)
-        resposta.close()
-        print("Mensagem enviada!")
+  return (codigo == 200);
+}
 
-    except Exception as erro:
-        print("Erro:", erro)
+// =========================
+// SETUP
+// =========================
+void setup(){
+  Serial.begin(115200);
+  delay(500);
+  Serial.println("ESP iniciado");
 
-def ler_acelerometro():
+  pinMode(BOTAO, INPUT_PULLUP);
 
-    dados = i2c.readfrom_mem(MPU_ADDR, 0x3B, 6)
+  // Inicializa o sensor MPU6050
+  Wire.begin(I2C_SDA, I2C_SCL); 
+  delay(100);
+  Wire.beginTransmission(MPU_ADDR);
+  Wire.write(0x6B); 
+  Wire.write(0);    
+  Wire.endTransmission(true);
+  Serial.println("MPU6050 Configurado");
 
-    x = int.from_bytes(dados[0:2], 'big', True)
-    y = int.from_bytes(dados[2:4], 'big', True)
-    z = int.from_bytes(dados[4:6], 'big', True)
+  // Sua conexão WiFi original que funciona perfeitamente
+  Serial.println("Conectando WiFi");
+  WiFi.begin(ssid, password);
 
-    return x, y, z
+  while(WiFi.status() != WL_CONNECTED){
+    delay(1000);
+    Serial.println(".");
+  }
 
-while True:
+  Serial.println("WiFi conectado");
+  Serial.print("IP: ");
+  Serial.println(WiFi.localIP());
 
-    if botao.value() == 0:
-        enviar_mensagem("🚨 Botão de emergência acionado!")
-        time.sleep(2)
+  bool ok = enviarMensagem("ESP conectado com sucesso");
+  if(ok) Serial.println("Telegram conectado");
+  else Serial.println("Erro Telegram");
+}
 
-    x, y, z = ler_acelerometro()
+// =========================
+// LOOP
+// =========================
+void loop(){
+  // --- LÓGICA DO BOTÃO ---
+  bool estadoBotao = digitalRead(BOTAO);
 
-    intensidade = math.sqrt(x*x + y*y + z*z)
+  if(estadoBotao == LOW && botaoAnterior == HIGH){
+    Serial.println("Botao apertado");
+    
+    // MUDANÇA DA MENSAGEM DO BOTÃO AQUI:
+    bool ok = enviarMensagem("botão pressionado: Estou precisando de ajuda ajuda requisitada");
+    
+    if(ok) Serial.println("Mensagem enviada");
+    else Serial.println("Falha envio");
+    delay(500);
+  }
+  botaoAnterior = estadoBotao;
 
-    if intensidade > 30000 and not alerta_queda_enviado:
+  // --- LÓGICA DO MPU6050 (MOVIMENTO BRUSCO) ---
+  Wire.beginTransmission(MPU_ADDR);
+  Wire.write(0x3B); 
+  Wire.endTransmission(false);
+  Wire.requestFrom(MPU_ADDR, 6, true); 
 
-        enviar_mensagem("⚠️ Possível queda detectada!")
+  if(Wire.available() == 6) {
+    int16_t rawX = Wire.read() << 8 | Wire.read();
+    int16_t rawY = Wire.read() << 8 | Wire.read();
+    int16_t rawZ = Wire.read() << 8 | Wire.read();
 
-        alerta_queda_enviado = True
+    // Converte os valores brutos para G (Gravidade)
+    float ax = rawX / 16384.0;
+    float ay = rawY / 16384.0;
+    float az = rawZ / 16384.0;
 
-    if intensidade < 18000:
-        alerta_queda_enviado = False
+    // Calcula a força total atuando no sensor (vetor resultante)
+    float aceleracaoTotal = sqrt(ax*ax + ay*ay + az*az);
+    
+    // Subtrai 1.0 (que é a gravidade natural da Terra quando parado)
+    float movimento = abs(aceleracaoTotal - 1.0);
 
-    time.sleep(0.2)
+    // Se o movimento for maior que o limite e o tempo de segurança passou
+    if(movimento > LIMITE_MOVIMENTO_BRUSCO && (millis() - ultimoDisparoMpu > INTERVALO_DISPARO)) {
+      ultimoDisparoMpu = millis(); // Reseta o temporizador
+      
+      Serial.print("Movimento detectado! Forca: ");
+      Serial.println(movimento);
+      
+      // Envia o alerta para o Telegram
+      bool okMpu = enviarMensagem("Alerta: Movimento brusco detectado!");
+      if(okMpu) Serial.println("Mensagem de movimento enviada");
+      else Serial.println("Falha envio MPU");
+    }
+  }
+
+  delay(30); // Pausa curta para não estressar o processador
+}

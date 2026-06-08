@@ -1,14 +1,15 @@
 #include <WiFi.h>
 #include <HTTPClient.h>
 #include <Wire.h> 
+import os
 
 // ===== WIFI =====
-const char* ssid = "Dragondex";
-const char* password = "testando";
+const char* ssid = os.getenv(ssid);
+const char* password = os.getenv(password);
 
 // ===== TELEGRAM =====
-String BOT_TOKEN = "8659967301:AAGkw0dkal2mRnroGONz6nEcr0UYv_lajxg";
-String CHAT_ID = "1674707575";
+String BOT_TOKEN = os.getenv(token);
+String CHAT_ID = os.getenv(chat_id);
 
 // ===== BOTÃO =====
 #define BOTAO 26
